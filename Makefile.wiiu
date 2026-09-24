@@ -1,0 +1,89 @@
+# Wii U package target
+#
+# The input must be a native Wii U RPX produced by a WUT build. A Wii DOL is
+# deliberately not accepted here: it cannot be launched as a native Wii U
+# application.
+
+.PHONY: all wiiu wiiu-backend check-wiiu-toolchain check-wiiu-link clean
+
+ifeq ($(strip $(DEVKITPRO)),)
+$(warning DEVKITPRO is not set; Wii U backend targets require devkitPro WUT)
+else
+include $(DEVKITPRO)/wut/share/wut_rules
+endif
+
+TARGET       ?= wii64-wiiu
+EXECUTABLES  ?= executables
+WIIU_RPX     ?= $(EXECUTABLES)/$(TARGET).rpx
+WIIU_WUHB    ?= $(EXECUTABLES)/$(TARGET).wuhb
+WIIU_ICON    ?= release/apps/wii64/icon.png
+WIIU_NAME    ?= Wii64
+WIIU_SHORT   ?= wii64
+WIIU_AUTHOR  ?= Wii64 Team
+
+WUT_ROOT     ?= $(DEVKITPRO)/wut
+PORTLIBS     ?= $(DEVKITPRO)/portlibs/ppc
+DEVKITPPC    ?= $(DEVKITPRO)/devkitPPC
+WIIU_BUILD   ?= build_wiiu
+WIIU_ELF     ?= $(EXECUTABLES)/$(TARGET).elf
+WIIU_BACKEND := $(WIIU_BUILD)/libwii64-wiiu-backend.a
+WIIU_CFLAGS  := -g -O3 -Wall -Wextra -ffunction-sections -fdata-sections \
+	-D__WIIU__ -D__WUT__ -I$(WUT_ROOT)/include $(foreach dir,$(PORTLIBS),-I$(dir)/include) -I.
+WIIU_CXXFLAGS := $(WIIU_CFLAGS) -std=c++17
+WIIU_LDFLAGS := $(MACHDEP) $(RPXSPECS) -Wl,--gc-sections
+WIIU_LIBPATHS := -L$(WUT_ROOT)/lib -L$(WUT_ROOT)/usr/lib $(foreach dir,$(PORTLIBS),-L$(dir)/lib)
+WIIU_LIBS ?= -lwut -lm
+WIIU_EXTRA_OBJECTS ?= $(WIIU_BUILD)/wiiu/WiiUEntry.o
+
+WIIU_CPP_SOURCES := wiiu/WiiUPlatform.cpp wiiu/WiiUGX2Framebuffer.cpp
+WIIU_C_SOURCES := fileBrowser/fileBrowser-wiiu.c
+WIIU_CPP_OBJECTS := $(WIIU_CPP_SOURCES:%.cpp=$(WIIU_BUILD)/%.o)
+WIIU_C_OBJECTS := $(WIIU_C_SOURCES:%.c=$(WIIU_BUILD)/%.o)
+WIIU_OBJECTS := $(WIIU_CPP_OBJECTS) $(WIIU_C_OBJECTS)
+
+all: wiiu
+
+wiiu-backend: check-wiiu-toolchain $(WIIU_BACKEND)
+
+check-wiiu-toolchain:
+	@test -n "$(DEVKITPRO)" || (echo "DEVKITPRO must point to a devkitPro installation" >&2; exit 1)
+	@test -f "$(WUT_ROOT)/share/wut_rules" || (echo "WUT rules not found in $(WUT_ROOT)" >&2; exit 1)
+	@test -x "$(DEVKITPPC)/bin/powerpc-eabi-g++" || (echo "devkitPPC PowerPC compiler not found" >&2; exit 1)
+
+check-wiiu-link: check-wiiu-toolchain
+	@test -n "$(WIIU_EXTRA_OBJECTS)" || (echo "WIIU_EXTRA_OBJECTS must include the native Wii U entrypoint and any native emulator objects" >&2; exit 1)
+
+$(WIIU_BACKEND): $(WIIU_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(AR) rcs $@ $^
+
+$(WIIU_BUILD)/wiiu/%.o: wiiu/%.cpp
+	@mkdir -p "$(dir $@)"
+	$(CXX) $(WIIU_CXXFLAGS) -c $< -o $@
+
+$(WIIU_BUILD)/fileBrowser/%.o: fileBrowser/%.c
+	@mkdir -p "$(dir $@)"
+	$(CC) $(WIIU_CFLAGS) -c $< -o $@
+
+wiiu: check-wiiu-link $(WIIU_WUHB)
+
+$(WIIU_ELF): $(WIIU_BACKEND) $(WIIU_EXTRA_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(CXX) $(WIIU_LDFLAGS) $(WIIU_LIBPATHS) $(WIIU_EXTRA_OBJECTS) $(WIIU_BACKEND) $(WIIU_LIBS) -o $@
+
+# wut_rules supplies the ELF-to-RPX conversion rule used by the reference repos.
+$(WIIU_RPX): $(WIIU_ELF)
+
+$(WIIU_WUHB): $(WIIU_RPX) $(WIIU_ICON)
+	@test -n "$(DEVKITPRO)" || (echo "DEVKITPRO must point to a devkitPro installation" >&2; exit 1)
+	@test -x "$(DEVKITPRO)/tools/bin/wuhbtool" || (echo "wuhbtool not found in $(DEVKITPRO)/tools/bin" >&2; exit 1)
+	@mkdir -p "$(dir $@)"
+	@echo "packaging $@ ..."
+	@$(DEVKITPRO)/tools/bin/wuhbtool "$(WIIU_RPX)" "$@" \
+		--name="$(WIIU_NAME)" \
+		--short-name="$(WIIU_SHORT)" \
+		--author="$(WIIU_AUTHOR)" \
+		--icon="$(WIIU_ICON)"
+
+clean:
+	rm -f "$(WIIU_WUHB)" "$(WIIU_RPX)" "$(WIIU_ELF)" "$(WIIU_BACKEND)" $(WIIU_OBJECTS) $(WIIU_EXTRA_OBJECTS)
